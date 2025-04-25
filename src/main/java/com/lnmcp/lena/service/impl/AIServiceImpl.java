@@ -5,6 +5,8 @@ import com.lnmcp.lena.model.DocumentContext;
 import com.lnmcp.lena.model.McpContext;
 import com.lnmcp.lena.model.PromptRequest;
 import com.lnmcp.lena.service.AIService;
+import com.lnmcp.lena.service.DatabaseService;
+import com.lnmcp.lena.service.DocumentService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -16,6 +18,7 @@ import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
+import java.io.IOException;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -37,6 +40,8 @@ public class AIServiceImpl implements AIService {
     private String ollamaModel;
 
     private final RestTemplate restTemplate;
+    private final DocumentService documentService;
+    private final DatabaseService databaseService;
 
     @Override
     public McpContext generateResponse(McpContext mcpContext) {
@@ -131,12 +136,42 @@ public class AIServiceImpl implements AIService {
     @Override
     public String processPromptRequest(PromptRequest promptRequest) {
         try {
-            // Create a simple prompt from the request
-            return generateSimpleResponse(promptRequest.getPrompt(), null);
+            // Build context from prompt request
+            McpContext mcpContext = buildContextFromPromptRequest(promptRequest);
+
+            // Generate response using the context
+            McpContext updatedContext = generateResponse(mcpContext);
+
+            return updatedContext.getAiResponse();
         } catch (Exception e) {
             log.error("Error processing prompt request", e);
             return "Error processing request: " + e.getMessage();
         }
+    }
+
+    /**
+     * Build a McpContext from a PromptRequest
+     */
+    private McpContext buildContextFromPromptRequest(PromptRequest promptRequest) throws IOException {
+        McpContext mcpContext = McpContext.builder()
+                .userPrompt(promptRequest.getPrompt())
+                .build();
+
+        // Extract context from documents if specified
+        if (promptRequest.getDocumentReferences() != null && !promptRequest.getDocumentReferences().isEmpty()) {
+            List<DocumentContext> documentContexts = documentService.extractContextFromMultipleDocumentsByFilename(
+                    promptRequest.getDocumentReferences());
+            documentContexts.forEach(mcpContext::addDocumentContext);
+        }
+
+        // Extract context from database tables if specified
+        if (promptRequest.getDatabaseReferences() != null && !promptRequest.getDatabaseReferences().isEmpty()) {
+            List<DatabaseContext> databaseContexts = databaseService.extractContextFromMultipleTables(
+                    promptRequest.getDatabaseReferences());
+            databaseContexts.forEach(mcpContext::addDatabaseContext);
+        }
+
+        return mcpContext;
     }
 
     /**
