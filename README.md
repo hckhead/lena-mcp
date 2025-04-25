@@ -172,6 +172,8 @@ The MCP server includes several performance optimizations:
 5. **Database Caching**: Database contexts are cached to avoid repeatedly querying the same tables.
 6. **Limited Response Size**: API calls to the AI model include parameters to limit the response size, reducing processing time.
 7. **Limited Database Queries**: Database queries are limited to 100 rows to reduce the amount of data transferred and processed.
+8. **Startup Caching**: Documents and database tables are pre-parsed and cached at application startup, eliminating the initial delay when they are first accessed.
+9. **In-memory Response Caching**: AI responses are cached in memory to avoid repeatedly generating responses for similar questions. The system normalizes prompts (removing common words, sorting words, etc.) to identify similar questions, allowing it to reuse responses even when questions are phrased differently.
 
 ## Automatic Context Determination
 

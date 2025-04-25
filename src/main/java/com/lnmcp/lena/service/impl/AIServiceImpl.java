@@ -7,6 +7,7 @@ import com.lnmcp.lena.model.PromptRequest;
 import com.lnmcp.lena.service.AIService;
 import com.lnmcp.lena.service.DatabaseService;
 import com.lnmcp.lena.service.DocumentService;
+import com.lnmcp.lena.service.ResponseCacheService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
@@ -42,10 +43,23 @@ public class AIServiceImpl implements AIService {
     private final RestTemplate restTemplate;
     private final DocumentService documentService;
     private final DatabaseService databaseService;
+    private final ResponseCacheService responseCacheService;
 
     @Override
     public McpContext generateResponse(McpContext mcpContext) {
         try {
+            // Check if a response for a similar prompt is already in the cache
+            McpContext cachedContext = responseCacheService.getCachedResponse(mcpContext.getUserPrompt());
+            if (cachedContext != null) {
+                log.info("Using cached response for prompt: {}", mcpContext.getUserPrompt());
+                // Copy the AI response from the cached context to the current context
+                mcpContext.setAiResponse(cachedContext.getAiResponse());
+                return mcpContext;
+            }
+
+            // If not in cache, generate a new response
+            log.info("Generating new response for prompt: {}", mcpContext.getUserPrompt());
+
             // Build system prompt from MCP context
             String systemPrompt = buildSystemPrompt(mcpContext);
 
@@ -57,6 +71,9 @@ public class AIServiceImpl implements AIService {
 
             // Update MCP context with AI response
             mcpContext.setAiResponse(response);
+
+            // Cache the response for future use
+            responseCacheService.cacheResponse(mcpContext.getUserPrompt(), mcpContext);
 
             return mcpContext;
         } catch (Exception e) {
@@ -70,6 +87,18 @@ public class AIServiceImpl implements AIService {
     @Async
     public CompletableFuture<McpContext> generateResponseAsync(McpContext mcpContext) {
         try {
+            // Check if a response for a similar prompt is already in the cache
+            McpContext cachedContext = responseCacheService.getCachedResponse(mcpContext.getUserPrompt());
+            if (cachedContext != null) {
+                log.info("Using cached response for prompt (async): {}", mcpContext.getUserPrompt());
+                // Copy the AI response from the cached context to the current context
+                mcpContext.setAiResponse(cachedContext.getAiResponse());
+                return CompletableFuture.completedFuture(mcpContext);
+            }
+
+            // If not in cache, generate a new response
+            log.info("Generating new response for prompt (async): {}", mcpContext.getUserPrompt());
+
             // Build system prompt from MCP context
             String systemPrompt = buildSystemPrompt(mcpContext);
 
@@ -82,6 +111,9 @@ public class AIServiceImpl implements AIService {
             // Update MCP context with AI response
             mcpContext.setAiResponse(response);
 
+            // Cache the response for future use
+            responseCacheService.cacheResponse(mcpContext.getUserPrompt(), mcpContext);
+
             return CompletableFuture.completedFuture(mcpContext);
         } catch (Exception e) {
             log.error("Error generating AI response asynchronously", e);
@@ -93,12 +125,31 @@ public class AIServiceImpl implements AIService {
     @Override
     public String generateSimpleResponse(String prompt, Map<String, Object> modelParameters) {
         try {
+            // Check if a response for a similar prompt is already in the cache
+            McpContext cachedContext = responseCacheService.getCachedResponse(prompt);
+            if (cachedContext != null) {
+                log.info("Using cached response for simple prompt: {}", prompt);
+                return cachedContext.getAiResponse();
+            }
+
+            // If not in cache, generate a new response
+            log.info("Generating new response for simple prompt: {}", prompt);
+
             double temperature = 0.7;
             if (modelParameters != null && modelParameters.containsKey("temperature")) {
                 temperature = (Double) modelParameters.get("temperature");
             }
 
-            return callOllamaApi(prompt, temperature);
+            String response = callOllamaApi(prompt, temperature);
+
+            // Cache the response for future use
+            McpContext context = McpContext.builder()
+                    .userPrompt(prompt)
+                    .aiResponse(response)
+                    .build();
+            responseCacheService.cacheResponse(prompt, context);
+
+            return response;
         } catch (Exception e) {
             log.error("Error generating simple AI response", e);
             return "Error generating response: " + e.getMessage();
