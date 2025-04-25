@@ -1,4 +1,28 @@
-# MCP API Testing Guide
+# MCP Server
+
+This is a Spring Boot application that integrates with Spring AI to process user prompts, extract context from documents and database, and generate AI responses.
+
+## Maven Setup
+
+This project uses Maven for dependency management and build automation. A Maven wrapper (`mvnw` and `mvnw.cmd`) is included in the project, but the wrapper JAR file might need to be downloaded:
+
+```bash
+# Download the Maven wrapper JAR file
+mkdir -p .mvn/wrapper
+wget https://repo.maven.apache.org/maven2/org/apache/maven/wrapper/maven-wrapper/3.2.0/maven-wrapper-3.2.0.jar -O .mvn/wrapper/maven-wrapper.jar
+```
+
+After downloading the wrapper JAR, you can use the Maven wrapper to build and run the project:
+
+```bash
+# On Unix-like systems
+./mvnw clean install
+
+# On Windows
+mvnw.cmd clean install
+```
+
+## API Testing Guide
 
 This guide explains how to test the MCP (Message Context Protocol) API functionality.
 
@@ -68,7 +92,7 @@ The `ApiClientExample` class contains examples for:
    ```java
    Map<String, Object> paramRequest = new HashMap<>();
    paramRequest.put("prompt", "Generate creative content");
-   
+
    Map<String, Object> modelParams = new HashMap<>();
    modelParams.put("temperature", 0.9);
    modelParams.put("maxTokens", 2000);
