@@ -69,7 +69,25 @@ public class AIServiceImpl implements AIService {
     @Override
     @Async
     public CompletableFuture<McpContext> generateResponseAsync(McpContext mcpContext) {
-        return CompletableFuture.completedFuture(generateResponse(mcpContext));
+        try {
+            // Build system prompt from MCP context
+            String systemPrompt = buildSystemPrompt(mcpContext);
+
+            // Combine system prompt and user prompt
+            String fullPrompt = systemPrompt + "\n\nUser: " + mcpContext.getUserPrompt();
+
+            // Call Ollama API
+            String response = callOllamaApi(fullPrompt, 0.7);
+
+            // Update MCP context with AI response
+            mcpContext.setAiResponse(response);
+
+            return CompletableFuture.completedFuture(mcpContext);
+        } catch (Exception e) {
+            log.error("Error generating AI response asynchronously", e);
+            mcpContext.setAiResponse("Error generating response: " + e.getMessage());
+            return CompletableFuture.completedFuture(mcpContext);
+        }
     }
 
     @Override
@@ -101,6 +119,12 @@ public class AIServiceImpl implements AIService {
             requestBody.put("temperature", temperature);
             requestBody.put("stream", false);
 
+            // Add max_tokens parameter to limit response length
+            requestBody.put("max_tokens", 2000);
+
+            // Add num_predict parameter as an alternative way to limit response length
+            requestBody.put("num_predict", 2000);
+
             // Set headers
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
@@ -108,7 +132,7 @@ public class AIServiceImpl implements AIService {
             // Create request entity
             HttpEntity<Map<String, Object>> requestEntity = new HttpEntity<>(requestBody, headers);
 
-            // Make POST request
+            // Make POST request with timeout
             ResponseEntity<Map> responseEntity = restTemplate.postForEntity(url, requestEntity, Map.class);
 
             // Extract response

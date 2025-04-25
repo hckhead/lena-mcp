@@ -9,7 +9,7 @@ import java.util.Map;
  * Service for interacting with the database and extracting context.
  */
 public interface DatabaseService {
-    
+
     /**
      * Extract context from a specific table
      *
@@ -17,7 +17,7 @@ public interface DatabaseService {
      * @return DatabaseContext containing extracted information
      */
     DatabaseContext extractContextFromTable(String tableName);
-    
+
     /**
      * Extract context from multiple tables
      *
@@ -25,7 +25,7 @@ public interface DatabaseService {
      * @return List of DatabaseContext objects containing extracted information
      */
     List<DatabaseContext> extractContextFromMultipleTables(List<String> tableNames);
-    
+
     /**
      * Execute a custom SQL query and extract context
      *
@@ -34,14 +34,14 @@ public interface DatabaseService {
      * @return DatabaseContext containing extracted information
      */
     DatabaseContext executeCustomQuery(String query, String description);
-    
+
     /**
      * Get a list of all available tables in the database
      *
      * @return List of table names
      */
     List<String> getAllTables();
-    
+
     /**
      * Get the schema information for a specific table
      *
@@ -49,4 +49,12 @@ public interface DatabaseService {
      * @return Map of column names to their data types
      */
     Map<String, String> getTableSchema(String tableName);
+
+    /**
+     * Find tables that might be relevant to the given prompt
+     *
+     * @param prompt The user's prompt
+     * @return List of table names that might be relevant
+     */
+    List<String> findRelevantTables(String prompt);
 }

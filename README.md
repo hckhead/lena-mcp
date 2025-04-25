@@ -34,6 +34,18 @@ The MCP server provides an API endpoint at `http://localhost:8080/api/mcp/prompt
 2. Prompt requests with document references
 3. Prompt requests with database references
 4. Prompt requests with custom model parameters
+5. Automatic context determination from documents and database tables
+
+### Automatic Context Determination
+
+The MCP server can automatically determine which documents and database tables are relevant to a user's prompt. When no document or database references are explicitly specified in the request, the system will:
+
+1. Analyze the prompt to extract keywords
+2. Search for documents and database tables that match these keywords
+3. Process these relevant sources in parallel using asynchronous operations
+4. Include the extracted context in the AI response
+
+This feature allows users to submit general prompts without needing to specify which documents or tables to reference. The system will automatically find and use the most relevant sources of information.
 
 ## Automated Tests
 
@@ -148,3 +160,55 @@ If you encounter issues:
 2. Check that the API endpoint URL is correct
 3. Verify that your request format matches the expected format
 4. Check the server logs for any error messages
+
+## Performance Optimizations
+
+The MCP server includes several performance optimizations:
+
+1. **Asynchronous Processing**: The system uses asynchronous processing to handle requests in parallel, improving response times.
+2. **Parallel Document Processing**: Documents are processed in parallel using Java's parallel streams, utilizing multiple CPU cores.
+3. **Parallel Database Queries**: Database tables are queried in parallel, improving performance when working with multiple tables.
+4. **Document Caching**: Document contexts are cached to avoid repeatedly processing the same documents.
+5. **Database Caching**: Database contexts are cached to avoid repeatedly querying the same tables.
+6. **Limited Response Size**: API calls to the AI model include parameters to limit the response size, reducing processing time.
+7. **Limited Database Queries**: Database queries are limited to 100 rows to reduce the amount of data transferred and processed.
+
+## Automatic Context Determination
+
+The MCP server includes a feature that automatically determines which documents and database tables are relevant to a user's prompt. When no document or database references are explicitly specified in the request, the system will:
+
+1. Analyze the prompt to extract keywords
+2. Search for documents and database tables that match these keywords
+3. Process these relevant sources in parallel using asynchronous operations
+4. Include the extracted context in the AI response
+
+This feature allows users to submit general prompts without needing to specify which documents or tables to reference. The system will automatically find and use the most relevant sources of information.
+
+### How It Works
+
+1. **Keyword Extraction**: The system extracts meaningful keywords from the user's prompt by removing common words and short words.
+2. **Document Matching**: It searches for documents whose filenames contain any of the extracted keywords.
+3. **Table Matching**: It searches for database tables whose names contain any of the extracted keywords.
+4. **Parallel Processing**: The system searches for relevant documents and tables in parallel using asynchronous operations.
+5. **Context Integration**: The extracted context from relevant documents and tables is included in the AI response.
+
+### Example
+
+Instead of explicitly specifying document references:
+
+```json
+{
+  "prompt": "Tell me about 래미안 원펜타스",
+  "documentReferences": ["래미안 원펜타스_입주자모집공고.pdf"]
+}
+```
+
+You can simply send:
+
+```json
+{
+  "prompt": "Tell me about 래미안 원펜타스"
+}
+```
+
+The system will automatically find and use the "래미안 원펜타스_입주자모집공고.pdf" document if it's available.
