@@ -21,10 +21,12 @@ import org.springframework.web.client.RestTemplate;
 
 import java.io.IOException;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.CompletableFuture;
+import java.util.stream.Collectors;
 
 /**
  * Implementation of AIService using direct REST calls to Ollama API.
@@ -57,9 +59,50 @@ public class AIServiceImpl implements AIService {
                 return mcpContext;
             }
 
-            // If not in cache, generate a new response
+            // If not in cache, try to find relevant documents first
             log.info("Generating new response for prompt: {}", mcpContext.getUserPrompt());
+            
+            // If the context doesn't already have document contexts, try to find relevant ones
+            if ((mcpContext.getDocumentContexts() == null || mcpContext.getDocumentContexts().isEmpty()) && 
+                mcpContext.getUserPrompt() != null && !mcpContext.getUserPrompt().isEmpty()) {
+                
+                try {
+                    // Find relevant documents
+                    List<String> relevantDocuments = documentService.findRelevantDocuments(mcpContext.getUserPrompt());
+                    
+                    if (!relevantDocuments.isEmpty()) {
+                        log.info("Found {} relevant documents for prompt: {}", relevantDocuments.size(), mcpContext.getUserPrompt());
+                        
+                        // Extract context from relevant documents
+                        List<DocumentContext> documentContexts = documentService.extractContextFromMultipleDocumentsByFilename(relevantDocuments);
+                        
+                        // Add document contexts to MCP context
+                        documentContexts.forEach(mcpContext::addDocumentContext);
+                        
+                        // Check if we can generate a response directly from documents
+                        String documentResponse = tryGenerateResponseFromDocuments(mcpContext);
+                        
+                        if (documentResponse != null) {
+                            // We found a high-confidence response from documents
+                            log.info("Generated response directly from documents for prompt: {}", mcpContext.getUserPrompt());
+                            mcpContext.setAiResponse(documentResponse);
+                            
+                            // Cache the response for future use
+                            responseCacheService.cacheResponse(mcpContext.getUserPrompt(), mcpContext);
+                            
+                            return mcpContext;
+                        }
+                        
+                        // If we couldn't generate a response directly from documents, continue with LLM
+                        log.info("No high-confidence document match found, falling back to LLM for prompt: {}", mcpContext.getUserPrompt());
+                    }
+                } catch (IOException e) {
+                    log.warn("Error finding relevant documents, falling back to LLM: {}", e.getMessage());
+                    // Continue with LLM if there's an error finding documents
+                }
+            }
 
+            // If we couldn't generate a response from documents, use LLM
             // Build system prompt from MCP context
             String systemPrompt = buildSystemPrompt(mcpContext);
 
@@ -82,6 +125,148 @@ public class AIServiceImpl implements AIService {
             return mcpContext;
         }
     }
+    
+    /**
+     * Try to generate a response directly from document contexts without calling LLM
+     * Returns null if no high-confidence match is found
+     */
+    private String tryGenerateResponseFromDocuments(McpContext mcpContext) {
+        if (mcpContext.getDocumentContexts() == null || mcpContext.getDocumentContexts().isEmpty()) {
+            return null;
+        }
+        
+        String userPrompt = mcpContext.getUserPrompt().toLowerCase();
+        List<String> promptKeywords = extractKeywords(userPrompt);
+        
+        // Track the best matching document and its score
+        DocumentContext bestMatch = null;
+        double bestScore = 0.0;
+        String bestMatchingSection = null;
+        
+        // Check each document context for relevance
+        for (DocumentContext doc : mcpContext.getDocumentContexts()) {
+            if (doc.getContent() == null || doc.getContent().isEmpty()) {
+                continue;
+            }
+            
+            // Split content into paragraphs for more precise matching
+            String[] paragraphs = doc.getContent().split("\n\\s*\n");
+            
+            for (String paragraph : paragraphs) {
+                if (paragraph.trim().length() < 50) {
+                    continue; // Skip short paragraphs
+                }
+                
+                double score = calculateRelevanceScore(paragraph, userPrompt, promptKeywords);
+                
+                if (score > bestScore) {
+                    bestScore = score;
+                    bestMatch = doc;
+                    bestMatchingSection = paragraph;
+                }
+            }
+        }
+        
+        // If we found a good match, generate a response
+        if (bestMatch != null && bestScore >= 0.7) { // Threshold for high confidence
+            return generateResponseFromDocument(mcpContext.getUserPrompt(), bestMatch, bestMatchingSection);
+        }
+        
+        return null; // No high-confidence match found
+    }
+    
+    /**
+     * Generate a response from a document context
+     */
+    private String generateResponseFromDocument(String userPrompt, DocumentContext doc, String matchingSection) {
+        StringBuilder response = new StringBuilder();
+        
+        response.append("Based on the information from \"").append(doc.getFilename()).append("\":\n\n");
+        response.append(matchingSection.trim());
+        
+        // Add source information
+        response.append("\n\n(Source: ").append(doc.getFilename());
+        if (doc.getPageNumber() != null) {
+            response.append(", Page/Slide: ").append(doc.getPageNumber());
+        }
+        response.append(")");
+        
+        return response.toString();
+    }
+    
+    /**
+     * Calculate relevance score between a paragraph and a user prompt
+     */
+    private double calculateRelevanceScore(String paragraph, String prompt, List<String> promptKeywords) {
+        String lowerParagraph = paragraph.toLowerCase();
+        double score = 0.0;
+        
+        // Check for exact phrase match (highest weight)
+        if (lowerParagraph.contains(prompt)) {
+            score += 0.6;
+        }
+        
+        // Check for keyword matches
+        int keywordMatches = 0;
+        for (String keyword : promptKeywords) {
+            if (lowerParagraph.contains(keyword)) {
+                keywordMatches++;
+            }
+        }
+        
+        // Calculate keyword match percentage and add to score
+        if (!promptKeywords.isEmpty()) {
+            double keywordMatchPercentage = (double) keywordMatches / promptKeywords.size();
+            score += keywordMatchPercentage * 0.3;
+        }
+        
+        // Check for question words and their nearby answers
+        if (prompt.contains("what") || prompt.contains("how") || prompt.contains("when") || 
+            prompt.contains("where") || prompt.contains("why") || prompt.contains("who")) {
+            
+            // If the paragraph contains phrases like "is", "are", "means", etc. after a keyword
+            for (String keyword : promptKeywords) {
+                if (lowerParagraph.contains(keyword + " is") || 
+                    lowerParagraph.contains(keyword + " are") ||
+                    lowerParagraph.contains(keyword + " means") ||
+                    lowerParagraph.contains(keyword + " refers to")) {
+                    score += 0.2;
+                    break;
+                }
+            }
+        }
+        
+        return score;
+    }
+    
+    /**
+     * Extract keywords from a prompt (simplified version)
+     */
+    private List<String> extractKeywords(String prompt) {
+        if (prompt == null || prompt.trim().isEmpty()) {
+            return new ArrayList<>();
+        }
+        
+        // Convert to lowercase and split by non-alphanumeric characters
+        String[] words = prompt.toLowerCase().split("[^a-zA-Z0-9가-힣]+");
+        
+        // Filter out common words and short words
+        List<String> commonWords = Arrays.asList("the", "a", "an", "and", "or", "but", "is", "are", "was", "were", 
+                                               "in", "on", "at", "to", "for", "with", "by", "about", "like", 
+                                               "through", "over", "before", "after", "between", "under", "during",
+                                               "of", "from", "up", "down", "into", "out", "as", "if", "when", 
+                                               "why", "how", "all", "any", "both", "each", "few", "more", "most",
+                                               "other", "some", "such", "no", "nor", "not", "only", "own", "same",
+                                               "so", "than", "too", "very", "can", "will", "just", "should", "now");
+        
+        List<String> keywords = new ArrayList<>();
+        for (String word : words) {
+            if (word.length() > 2 && !commonWords.contains(word)) {
+                keywords.add(word);
+            }
+        }
+        return keywords;
+    }
 
     @Override
     @Async
@@ -96,9 +281,50 @@ public class AIServiceImpl implements AIService {
                 return CompletableFuture.completedFuture(mcpContext);
             }
 
-            // If not in cache, generate a new response
+            // If not in cache, try to find relevant documents first
             log.info("Generating new response for prompt (async): {}", mcpContext.getUserPrompt());
+            
+            // If the context doesn't already have document contexts, try to find relevant ones
+            if ((mcpContext.getDocumentContexts() == null || mcpContext.getDocumentContexts().isEmpty()) && 
+                mcpContext.getUserPrompt() != null && !mcpContext.getUserPrompt().isEmpty()) {
+                
+                try {
+                    // Find relevant documents
+                    List<String> relevantDocuments = documentService.findRelevantDocuments(mcpContext.getUserPrompt());
+                    
+                    if (!relevantDocuments.isEmpty()) {
+                        log.info("Found {} relevant documents for prompt (async): {}", relevantDocuments.size(), mcpContext.getUserPrompt());
+                        
+                        // Extract context from relevant documents
+                        List<DocumentContext> documentContexts = documentService.extractContextFromMultipleDocumentsByFilename(relevantDocuments);
+                        
+                        // Add document contexts to MCP context
+                        documentContexts.forEach(mcpContext::addDocumentContext);
+                        
+                        // Check if we can generate a response directly from documents
+                        String documentResponse = tryGenerateResponseFromDocuments(mcpContext);
+                        
+                        if (documentResponse != null) {
+                            // We found a high-confidence response from documents
+                            log.info("Generated response directly from documents for prompt (async): {}", mcpContext.getUserPrompt());
+                            mcpContext.setAiResponse(documentResponse);
+                            
+                            // Cache the response for future use
+                            responseCacheService.cacheResponse(mcpContext.getUserPrompt(), mcpContext);
+                            
+                            return CompletableFuture.completedFuture(mcpContext);
+                        }
+                        
+                        // If we couldn't generate a response directly from documents, continue with LLM
+                        log.info("No high-confidence document match found, falling back to LLM for prompt (async): {}", mcpContext.getUserPrompt());
+                    }
+                } catch (IOException e) {
+                    log.warn("Error finding relevant documents, falling back to LLM (async): {}", e.getMessage());
+                    // Continue with LLM if there's an error finding documents
+                }
+            }
 
+            // If we couldn't generate a response from documents, use LLM
             // Build system prompt from MCP context
             String systemPrompt = buildSystemPrompt(mcpContext);
 

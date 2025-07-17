@@ -187,17 +187,179 @@ public class DocumentServiceImpl implements DocumentService {
             return new ArrayList<>();
         }
 
-        // Simple relevance check: check if any keywords from the prompt appear in the document filename
-        // In a real implementation, this would be more sophisticated, possibly using embeddings or other NLP techniques
+        // Extract keywords from the prompt
         List<String> keywords = extractKeywords(prompt);
+        
+        if (keywords.isEmpty()) {
+            log.warn("No meaningful keywords extracted from prompt: {}", prompt);
+            return new ArrayList<>();
+        }
 
-        return allDocuments.stream()
-                .filter(filename -> {
-                    String lowercaseFilename = filename.toLowerCase();
-                    return keywords.stream()
-                            .anyMatch(keyword -> lowercaseFilename.contains(keyword.toLowerCase()));
-                })
+        // Create a map to store document relevance scores
+        Map<String, Double> documentScores = new ConcurrentHashMap<>();
+
+        // Process documents in parallel for better performance
+        allDocuments.parallelStream().forEach(filename -> {
+            try {
+                // First, check if the filename contains any keywords (quick check)
+                String lowercaseFilename = filename.toLowerCase();
+                boolean filenameMatch = keywords.stream()
+                        .anyMatch(keyword -> lowercaseFilename.contains(keyword.toLowerCase()));
+                
+                // Initialize score based on filename match
+                double score = filenameMatch ? 0.3 : 0.0;
+                
+                // Extract document content if not already in cache
+                DocumentContext docContext;
+                try {
+                    docContext = extractContextByFilename(filename);
+                } catch (IOException e) {
+                    log.error("Error extracting context from file: {}", filename, e);
+                    return; // Skip this document
+                }
+                
+                // If we have content, search through it
+                if (docContext != null && docContext.getContent() != null) {
+                    String content = docContext.getContent().toLowerCase();
+                    
+                    // Calculate content match score
+                    double contentScore = calculateContentScore(content, keywords, prompt.toLowerCase());
+                    
+                    // Combine scores
+                    score += contentScore;
+                    
+                    // Store the score if it's above threshold
+                    if (score > 0.1) {
+                        documentScores.put(filename, score);
+                    }
+                }
+            } catch (Exception e) {
+                log.error("Error processing document for relevance: {}", filename, e);
+            }
+        });
+        
+        // Sort documents by relevance score (descending) and return top results
+        return documentScores.entrySet().stream()
+                .sorted(Map.Entry.<String, Double>comparingByValue().reversed())
+                .limit(5) // Limit to top 5 most relevant documents
+                .map(Map.Entry::getKey)
                 .collect(Collectors.toList());
+    }
+    
+    /**
+     * Calculate content relevance score based on keyword matches and fuzzy matching
+     */
+    private double calculateContentScore(String content, List<String> keywords, String originalPrompt) {
+        double score = 0.0;
+        
+        // Check for exact keyword matches
+        for (String keyword : keywords) {
+            // Count occurrences of the keyword in content
+            int occurrences = countOccurrences(content, keyword.toLowerCase());
+            if (occurrences > 0) {
+                // Add score based on number of occurrences (with diminishing returns)
+                score += Math.min(0.2, 0.05 * occurrences);
+            }
+            
+            // Check for fuzzy matches (keywords with one character different)
+            List<String> fuzzyMatches = findFuzzyMatches(content, keyword.toLowerCase());
+            if (!fuzzyMatches.isEmpty()) {
+                score += Math.min(0.1, 0.02 * fuzzyMatches.size());
+            }
+        }
+        
+        // Check for exact phrase matches (higher weight)
+        if (content.contains(originalPrompt)) {
+            score += 0.5;
+        }
+        
+        // Check for sentence fragments (3+ word sequences)
+        String[] promptWords = originalPrompt.split("\\s+");
+        if (promptWords.length >= 3) {
+            for (int i = 0; i <= promptWords.length - 3; i++) {
+                String fragment = promptWords[i] + " " + promptWords[i+1] + " " + promptWords[i+2];
+                if (content.contains(fragment)) {
+                    score += 0.3;
+                }
+            }
+        }
+        
+        return score;
+    }
+    
+    /**
+     * Count occurrences of a substring in a string
+     */
+    private int countOccurrences(String text, String substring) {
+        int count = 0;
+        int index = 0;
+        while ((index = text.indexOf(substring, index)) != -1) {
+            count++;
+            index += substring.length();
+        }
+        return count;
+    }
+    
+    /**
+     * Find fuzzy matches for a keyword in text
+     * This implements a simple edit distance of 1 character
+     */
+    private List<String> findFuzzyMatches(String text, String keyword) {
+        List<String> matches = new ArrayList<>();
+        
+        // Only apply fuzzy matching for keywords of reasonable length
+        if (keyword.length() < 4) {
+            return matches;
+        }
+        
+        // Split text into words
+        String[] words = text.split("\\s+");
+        
+        for (String word : words) {
+            // Skip words with big length difference
+            if (Math.abs(word.length() - keyword.length()) > 1) {
+                continue;
+            }
+            
+            // Check edit distance
+            if (word.equals(keyword)) {
+                continue; // Skip exact matches
+            }
+            
+            if (calculateEditDistance(word, keyword) <= 1) {
+                matches.add(word);
+            }
+        }
+        
+        return matches;
+    }
+    
+    /**
+     * Calculate Levenshtein edit distance between two strings
+     */
+    private int calculateEditDistance(String s1, String s2) {
+        int[] costs = new int[s2.length() + 1];
+        
+        for (int i = 0; i <= s1.length(); i++) {
+            int lastValue = i;
+            for (int j = 0; j <= s2.length(); j++) {
+                if (i == 0) {
+                    costs[j] = j;
+                } else if (j > 0) {
+                    int newValue = costs[j - 1];
+                    if (s1.charAt(i - 1) != s2.charAt(j - 1)) {
+                        newValue = Math.min(Math.min(newValue, lastValue), costs[j]) + 1;
+                    }
+                    costs[j - 1] = lastValue;
+                    lastValue = newValue;
+                }
+            }
+            if (i > 0) {
+                costs[s2.length()] = lastValue;
+            }
+        }
+        
+        return costs[s2.length()];
     }
 
     /**
