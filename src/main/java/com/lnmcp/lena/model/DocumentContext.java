@@ -40,6 +40,7 @@ public class DocumentContext {
     public enum DocumentType {
         PDF,
         PPT,
+        TXT,
         UNKNOWN
     }
 }

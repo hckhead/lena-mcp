@@ -2,6 +2,7 @@ package com.lnmcp.lena.service.impl;
 
 import com.lnmcp.lena.model.DocumentContext;
 import com.lnmcp.lena.service.DocumentService;
+import com.lnmcp.lena.service.EmbeddingService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.pdfbox.pdmodel.PDDocument;
@@ -28,7 +29,8 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 /**
- * Implementation of DocumentService for processing PDF and PPT documents.
+ * Implementation of DocumentService for processing PDF, PPT, and TXT documents.
+ * Uses vector embeddings for improved document relevance matching.
  */
 @Service
 @RequiredArgsConstructor
@@ -37,6 +39,11 @@ public class DocumentServiceImpl implements DocumentService {
 
     @Value("${mcp.documents.path}")
     private String documentsPath;
+
+    @Value("${mcp.embeddings.enabled:true}")
+    private boolean embeddingsEnabled;
+
+    private final EmbeddingService embeddingService;
 
     // Cache for document contexts to avoid repeated processing of the same documents
     private final Map<String, DocumentContext> documentCache = new ConcurrentHashMap<>();
@@ -59,8 +66,21 @@ public class DocumentServiceImpl implements DocumentService {
             context = extractPdfContext(filePath);
         } else if (lowercaseFilename.endsWith(".ppt") || lowercaseFilename.endsWith(".pptx")) {
             context = extractPptContext(filePath);
+        } else if (lowercaseFilename.endsWith(".txt")) {
+            context = extractTxtContext(filePath);
         } else {
             throw new IOException("Unsupported file format: " + filename);
+        }
+
+        // Generate and store embedding if enabled
+        if (embeddingsEnabled && context.getContent() != null && !context.getContent().isEmpty()) {
+            try {
+                embeddingService.storeDocumentEmbedding(filename, context.getContent());
+                log.debug("Generated embedding for document: {}", filename);
+            } catch (Exception e) {
+                log.warn("Failed to generate embedding for document: {}", filename, e);
+                // Continue even if embedding generation fails
+            }
         }
 
         // Store in cache for future use
@@ -164,6 +184,21 @@ public class DocumentServiceImpl implements DocumentService {
                     .build();
         }
     }
+    
+    /**
+     * Extract context from a TXT file
+     */
+    private DocumentContext extractTxtContext(Path filePath) throws IOException {
+        String filename = filePath.getFileName().toString().toLowerCase();
+        String content = Files.readString(filePath);
+        
+        return DocumentContext.builder()
+                .filename(filename)
+                .documentType(DocumentContext.DocumentType.TXT)
+                .content(content)
+                .pageNumber(1) // TXT files don't have pages, so we set it to 1
+                .build();
+    }
 
     @Override
     public List<String> getAllDocuments() throws IOException {
@@ -173,7 +208,8 @@ public class DocumentServiceImpl implements DocumentService {
                     .map(path -> path.getFileName().toString())
                     .filter(filename -> filename.toLowerCase().endsWith(".pdf") || 
                                        filename.toLowerCase().endsWith(".ppt") || 
-                                       filename.toLowerCase().endsWith(".pptx"))
+                                       filename.toLowerCase().endsWith(".pptx") ||
+                                       filename.toLowerCase().endsWith(".txt"))
                     .collect(Collectors.toList());
         }
     }
@@ -187,6 +223,26 @@ public class DocumentServiceImpl implements DocumentService {
             return new ArrayList<>();
         }
 
+        // Try to use vector embeddings for similarity search if enabled
+        if (embeddingsEnabled) {
+            try {
+                // Find similar documents using embeddings
+                Map<String, Float> similarityScores = embeddingService.findSimilarDocuments(prompt, 5);
+                
+                if (!similarityScores.isEmpty()) {
+                    log.info("Found {} relevant documents using vector similarity", similarityScores.size());
+                    return new ArrayList<>(similarityScores.keySet());
+                } else {
+                    log.info("No documents found using vector similarity, falling back to keyword matching");
+                }
+            } catch (Exception e) {
+                log.warn("Error using vector similarity search, falling back to keyword matching: {}", e.getMessage());
+            }
+        }
+
+        // Fall back to keyword-based search if embeddings are disabled or failed
+        log.info("Using keyword-based search for document relevance");
+        
         // Extract keywords from the prompt
         List<String> keywords = extractKeywords(prompt);
         

@@ -503,7 +503,12 @@ public class AIServiceImpl implements AIService {
             }
         }
 
-        systemPrompt.append("Answer the user's question based on the provided context. If the information is not in the context, say so.");
+        systemPrompt.append("IMPORTANT INSTRUCTIONS:\n");
+        systemPrompt.append("1. Answer the user's question based ONLY on the provided context above.\n");
+        systemPrompt.append("2. If the information needed to answer the question is not in the context, explicitly state: \"I don't have enough information in the referenced materials to answer this question.\"\n");
+        systemPrompt.append("3. Do not make up or infer information that is not explicitly stated in the context.\n");
+        systemPrompt.append("4. If you're unsure about any part of your answer, indicate your uncertainty.\n");
+        systemPrompt.append("5. Always cite the specific document or database source for your information.\n");
 
         return systemPrompt.toString();
     }
